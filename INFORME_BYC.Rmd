@@ -1,0 +1,691 @@
+---
+title: ANALISIS DE MERCADO B&C (BIENES Y CASAS)
+affiliation:
+  wide: true
+  author:   
+   - name: Weimar Cortes Montiel
+     mark: [1]
+  institution:
+    - name: Pontificia Universidad Javeriana
+      department: Maestría en Ciencia de Datos
+      location: Cali, Colombia
+      email: weimarcortes@javerianacali.edu.co
+      mark: 1
+with_ifpdf: true
+with_cite: true
+with_amsmath: true
+with_algorithmic: true
+with_array: true
+with_dblfloatfix: true
+bibliography: mybibfile.bib
+output: rticles::ieee_article
+header-includes:
+  - \usepackage{float}
+  - \usepackage{placeins}
+  - \renewcommand{\abstractname}{}
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Sys.setlocale("LC_CTYPE", "en_US.UTF-8")
+```
+
+```{r, include=FALSE}
+library(paqueteMETODOS)
+library(dplyr)
+library(naniar)
+library(e1071)
+library(ggplot2)
+library(stringdist)
+library(knitr)
+library(kableExtra)
+library(pastecs)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(data.table)
+library(DataExplorer)
+library(psych)
+library(stringi)
+library(pander)
+library(geosphere)
+library(ggmap)
+```
+
+```{r, include=FALSE}
+data(vivienda_faltantes)
+head(vivienda_faltantes)
+```
+
+# INTRODUCCIÓN
+
+El mercado inmobiliario de Cali, Colombia, ha mostrado un crecimiento significativo en los últimos años, impulsado por factores como el aumento de la población, la inversión extranjera directa y el desarrollo de nuevos proyectos inmobiliarios.
+En 2022, las ventas del sector alcanzaron los \$6700 mil millones, mientras que en 2023 se registraron ventas por \$6100 mil millones.
+Este dinamismo sugiere que el mercado continuará expandiéndose, ofreciendo diversas oportunidades tanto para compradores como para inversores.
+
+B&C (Bienes y Casas) es una agencia de bienes raíces con sede en Cali, fundada hace 10 años por Sandra Milena.
+La empresa cuenta con un equipo de ocho agentes que se especializan en la compra y venta de propiedades en la región.
+B&C ha recopilado una base de datos exhaustiva que incluye información detallada sobre precios, ubicaciones, características y ventas de viviendas en Cali.
+
+El objetivo de este informe es realizar un análisis estadístico de los datos recopilados para proporcionar una visión clara y detallada del mercado inmobiliario en Cali.
+El informe se enfocará en varios aspectos clave, como los precios de las viviendas en diferentes zonas, los tipos de propiedades más ofertadas y las características más relevantes de las viviendas disponibles en el mercado.
+Este análisis será invaluable para B&C, ya que permitirá a la empresa identificar tendencias del mercado, definir su nicho específico, desarrollar estrategias de marketing adecuadas, establecer precios competitivos y ofrecer servicios personalizados a sus clientes.
+
+El análisis descriptivo buscará identificar patrones y tendencias en los datos, proporcionando una base sólida para la toma de decisiones estratégicas y mejorando la eficiencia operativa de B&C en un mercado inmobiliario en constante evolución.
+
+# ANÁLISIS DESCRIPTIVO
+
+Se revisa el estado de los datos en forma general, para luego identificar las columnas en las cuales se encuentran los valores cero y no validos (NA). (Anexo 1), (Anexo 2). Al momento de la evaluación inicial se identifica que el 95\% de los datos son válidos para el trabajo, con el 5\% restante se procede a depurar.
+Teniendo en cuenta los vacíos en la tabla se procede a normalizar los datos faltantes, este procedimiento se realiza por medio de la media y mediana, dependiendo del factor de simetría, para no afectar a gran escala los datos.
+Esto se realiza por zona, debido a que socialmente las condiciones cambian entre zonas urbanas en una ciudad, los resultados de la normalización (Anexo 3).
+
+
+```{r summary-table, echo=FALSE, include=FALSE}
+pander(summary(vivienda_faltantes))
+```
+
+```{r, echo=FALSE, include=FALSE}
+columnas_con_cero <- sapply(vivienda_faltantes, function(col) any(col == 0, na.rm = TRUE))
+nombres_columnas_con_cero <- names(columnas_con_cero[columnas_con_cero])
+df_columnas_con_cero <- data.frame(Columna = nombres_columnas_con_cero)
+kable(df_columnas_con_cero)
+```
+
+```{r echo=FALSE, warning=FALSE, include=FALSE}
+columnas_con_na <- sapply(vivienda_faltantes, function(col) any(is.na(col)))
+nombres_columnas_con_na <- names(columnas_con_na[columnas_con_na])
+columnas_por_fila <- 6
+matriz_columnas_na <- matrix(nombres_columnas_con_na, 
+                             ncol = columnas_por_fila, 
+                             byrow = TRUE)
+df_matriz_columnas_na <- as.data.frame(matriz_columnas_na)
+colnames(df_matriz_columnas_na) <- rep("", columnas_por_fila)
+kable(df_matriz_columnas_na)
+```
+
+```{r, include=FALSE}
+
+#Filas con 5 o mas NA se eliminan
+na_count <- rowSums(is.na(vivienda_faltantes))
+zero_count <- rowSums(vivienda_faltantes == 0, na.rm = TRUE)
+
+#Filas que tengan 2-NA y 2 Ceros en sus columnas se eliminan 
+filas_a_eliminar <- (na_count == 2 & zero_count == 2)
+
+#Si en la columna parqueadero, barrio y habitación aparece 0 consecutivamente debe eliminar la fila
+vivienda_faltantes_limpio <- vivienda_faltantes[!filas_a_eliminar, ]
+vivienda_faltantes_limpio <- vivienda_faltantes_limpio[!(vivienda_faltantes_limpio$parquea == 0 & 
+                                                           vivienda_faltantes_limpio$banios == 0 & 
+                                                           vivienda_faltantes_limpio$habitac == 0), ]
+
+#Filas con NA en la columna zona se eliminan
+vivienda_faltantes_limpio <- vivienda_faltantes[!is.na(vivienda_faltantes$zona), ]
+
+#Se estandarizan las variables en la columna "tipo"
+vivienda_faltantes_limpio$tipo <- gsub("^(Apartamento|APARTAMENTO|apto)$", "Apartamento", vivienda_faltantes_limpio$tipo)
+vivienda_faltantes_limpio$tipo <- gsub("^(casa|Casa|CASA)$", "Casa", vivienda_faltantes_limpio$tipo)
+table(vivienda_faltantes_limpio$tipo)
+
+#Verificación de datos con respecto a NA
+columnas_con_na <- sapply(vivienda_faltantes_limpio, function(col) any(is.na(col)))
+nombres_columnas_con_na <- names(columnas_con_na[columnas_con_na])
+nombres_columnas_con_na
+```
+
+```{r echo=FALSE, warning=FALSE, include=FALSE}
+nombres_zonas <- unique(vivienda_faltantes_limpio$zona)
+columnas_por_fila <- 3
+matriz_zonas <- matrix(nombres_zonas, 
+                       ncol = columnas_por_fila, 
+                       byrow = TRUE)
+df_matriz_zonas <- as.data.frame(matriz_zonas)
+colnames(df_matriz_zonas) <- rep("", columnas_por_fila)
+kable(df_matriz_zonas)
+
+#Se filtra la tabla por zonas y se crean los data frames para el respectivo trabajo
+zona_oeste <- vivienda_faltantes_limpio %>%
+  filter(zona == "Zona Oeste")
+zona_sur <- vivienda_faltantes_limpio %>%
+  filter(zona == "Zona Sur")
+zona_norte <- vivienda_faltantes_limpio %>%
+  filter(zona == "Zona Norte")
+zona_oriente <- vivienda_faltantes_limpio %>%
+  filter(zona == "Zona Oriente")
+zona_centro <- vivienda_faltantes_limpio %>%
+  filter(zona == "Zona Centro")
+
+
+#Se calcula la simetría por zona
+calcular_asimetria <- function(df) {
+  data.frame(
+    Columna = c("piso", "parquea", "banios", "habitac"),
+    Asimetria = c(
+      skewness(df$piso, na.rm = TRUE),
+      skewness(df$parquea, na.rm = TRUE),
+      skewness(df$banios, na.rm = TRUE),
+      skewness(df$habitac, na.rm = TRUE)
+    )
+  )
+}
+
+asimetria_oeste <- calcular_asimetria(zona_oeste)
+asimetria_sur <- calcular_asimetria(zona_sur)
+asimetria_norte <- calcular_asimetria(zona_norte)
+asimetria_oriente <- calcular_asimetria(zona_oriente)
+asimetria_centro <- calcular_asimetria(zona_centro)
+
+redondear_asimetria <- function(df) {
+  df %>%
+    mutate(Asimetria = round(Asimetria, 2))
+}
+
+asimetria_oeste <- redondear_asimetria(asimetria_oeste)
+asimetria_sur <- redondear_asimetria(asimetria_sur)
+asimetria_norte <- redondear_asimetria(asimetria_norte)
+asimetria_oriente <- redondear_asimetria(asimetria_oriente)
+asimetria_centro <- redondear_asimetria(asimetria_centro)
+
+asimetria_total <- data.frame(
+  Zona = rep(c("Zona Oeste", "Zona Sur", "Zona Norte", "Zona Oriente", "Zona Centro"), each = 4),
+  Columna = rep(c("piso", "parquea", "banios", "habitac"), times = 5),
+  Asimetria = c(
+    asimetria_oeste$Asimetria,
+    asimetria_sur$Asimetria,
+    asimetria_norte$Asimetria,
+    asimetria_oriente$Asimetria,
+    asimetria_centro$Asimetria
+  )
+)
+kable(asimetria_total, caption = "Asimetría de Variables por Zona")
+
+#Zona centro
+##Se reemplaza en columna parquea NA por 0 (se asume que en el centro no hay parqueadero, por ende se toma está decisión sin tomar en cuenta la simetría)
+zona_centro$parquea[is.na(zona_centro$parquea)] <- 0
+zona_centro
+##En la columna tipo se agrega la mediana en los valores NA (valor de simetria = 2.84)
+mediana_piso <- median(zona_centro$piso, na.rm = TRUE)
+zona_centro$piso[is.na(zona_centro$piso)] <- mediana_piso
+##Se agrega la mediana a la columna "banios" teniendo en cuenta la casa (valor de simetria = 0.99)
+mediana_banios <- median(zona_centro$banios[zona_centro$banios != 0], na.rm = TRUE)
+zona_centro$banios[zona_centro$banios == 0] <- mediana_banios
+##Se agrega la media a la columna "habitac" teniendo en cuenta la casa (valor de simetria = 0.45*)
+media_habitac <- mean(zona_centro$habitac[zona_centro$habitac != 0], na.rm = TRUE)
+zona_centro$habitac[zona_centro$habitac == 0] <- media_habitac
+zona_centro$habitac <- round(zona_centro$habitac, 0)
+summarytools::dfSummary(zona_centro)
+
+#zona norte
+##Se reemplaza en columna parquea NA por 0 ( se asume que en el norte no hay parqueadero, por ende se toma está descición sin tomar en cuenta la simetría)
+zona_norte$parquea[is.na(zona_norte$parquea)] <- 0
+zona_norte
+##Se agrega la mediana a la columna "tipo" teniendo en cuenta la casa (valor de simetria = 1.27)
+mediana_piso <- median(zona_norte$piso, na.rm = TRUE)
+zona_norte$piso[is.na(zona_norte$piso)] <- mediana_piso
+##Se agrega la mediana a la columna "banios" teniendo en cuenta la casa (valor de simetria = 1.20)
+mediana_banios <- median(zona_norte$banios[zona_norte$banios != 0], na.rm = TRUE)
+zona_norte$banios[zona_norte$banios == 0] <- mediana_banios
+##Se agrega la mediana a la columna "habitac" teniendo en cuenta la casa (valor de simetria = 1.66)
+mediana_habitac <- median(zona_norte$habitac[zona_norte$habitac != 0], na.rm = TRUE)
+zona_norte$habitac[zona_norte$habitac == 0] <- mediana_habitac
+summarytools::dfSummary(zona_norte)
+
+#zona oeste
+##Se reemplaza en columna parquea NA por 0 ( se asume que en el oeste no hay parqueadero, por ende se toma está descición sin tomar en cuenta la simetría)
+zona_oeste$parquea[is.na(zona_oeste$parquea)] <- 0
+zona_oeste
+##Se agrega la mediana a la columna "piso" teniendo en cuenta la casa (valor de simetria = 0.66)
+mediana_piso <- median(zona_oeste$piso, na.rm = TRUE)
+zona_oeste$piso[is.na(zona_oeste$piso)] <- mediana_piso
+##Se agrega la media a la columna "banios" teniendo en cuenta la casa (valor de simetria = 0.37*)
+media_banios <- mean(zona_oeste$banios[zona_oeste$banios != 0], na.rm = TRUE)
+zona_oeste$banios[zona_oeste$banios == 0] <- media_banios
+zona_oeste$banios <- round(zona_oeste$banios, 0)
+##Se agrega la mediana a la columna "habitac" teniendo en cuenta la casa (valor de simetria = 1.88)
+mediana_habitac <- median(zona_oeste$habitac[zona_oeste$habitac != 0], na.rm = TRUE)
+zona_oeste$habitac[zona_oeste$habitac == 0] <- mediana_habitac
+summarytools::dfSummary(zona_oeste)
+
+#zona oriente
+##Se reemplaza en columna parquea NA por 0 (se asume que en el oriente no hay parqueadero, por ende se toma está descición sin tomar en cuenta la simetría)
+zona_oriente$parquea[is.na(zona_oriente$parquea)] <- 0
+zona_oriente
+##Se agrega la mediana a la columna "piso" teniendo en cuenta la casa (valor de simetria = 1.87)
+mediana_piso <- median(zona_oriente$piso, na.rm = TRUE)
+zona_oriente$piso[is.na(zona_oriente$piso)] <- mediana_piso
+##Se agrega la mediana a la columna "banios" teniendo en cuenta la casa (valor de simetria = 1.25)
+mediana_banios <- median(zona_oriente$banios[zona_oriente$banios != 0], na.rm = TRUE)
+zona_oriente$banios[zona_oriente$banios == 0] <- mediana_banios
+##Se agrega la media a la columna "habitac" teniendo en cuenta la casa (valor de simetria = 0.42*)
+media_habitac <- mean(zona_oriente$habitac[zona_oriente$habitac != 0], na.rm = TRUE)
+zona_oriente$habitac[zona_oriente$habitac == 0] <- media_banios
+zona_oriente$habitac <- round(zona_oriente$habitac, 0)
+summarytools::dfSummary(zona_oriente)
+
+#Zona sur
+##Se reemplaza en columna parquea NA por 0 (se asume que en el sur no hay parqueadero, por ende se toma está descición sin tomar en cuenta la simetría)
+zona_sur$parquea[is.na(zona_sur$parquea)] <- 0
+zona_sur
+##Se agrega la mediana a la columna "piso" teniendo en cuenta la casa (valor de simetria = 1.35)
+mediana_piso <- median(zona_sur$piso, na.rm = TRUE)
+zona_sur$piso[is.na(zona_sur$piso)] <- mediana_piso
+##Se agrega la mediana a la columna "banios" teniendo en cuenta la casa (valor de simetria = 1.02)
+mediana_banios <- median(zona_sur$banios[zona_sur$banios != 0], na.rm = TRUE)
+zona_sur$banios[zona_sur$banios == 0] <- mediana_banios
+##Se agrega la mediana a la columna "habitac" teniendo en cuenta la casa (valor de simetria = 1.74)
+media_habitac <- median(zona_sur$habitac[zona_sur$habitac != 0], na.rm = TRUE)
+zona_sur$habitac[zona_sur$habitac == 0] <- media_banios
+zona_sur$habitac <- round(zona_sur$habitac, 0)
+summarytools::dfSummary(zona_sur)
+```
+
+```{r, echo=FALSE, include=FALSE}
+datos_combinados <- bind_rows(zona_centro, zona_norte, zona_oeste, zona_oriente, zona_sur)
+pander(summary(datos_combinados))
+```
+
+Como parte del análisis descriptivo, se calcularon la media, la mediana, entre otros datos para cada una de las columnas. Además, se constató que la validez de los datos (Pct. Valid) es del 100% en todas las columnas analizadas.
+Se usó en casos específicos la media para reemplazo, cuando el resultado de la asimetría estaba entre -0.5 y 0.5, en caso contrario se usa la mediana, está condición se evaluó en la columna tipo, teniendo en cuenta que allí existen dos variables, diferenciales.
+
+\vspace{-3em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+ggplot(datos_combinados, aes(x = zona, y = preciom, fill = zona)) +
+  geom_boxplot() +
+  labs(title = "",
+       x = "Zona",
+       y = "Precio (en millones)") +
+  scale_fill_manual(values = c("#87CEEB", "#90EE90", "#F08080", "#FA8072", "#FFB6C1")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "none")
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig 1. Distribución de Precios por Zona en Cali
+\end{center}
+```
+La Zona Centro muestra alta variabilidad en precios y numerosos datos atípicos, indicando diversidad en las propiedades. La Zona Norte y Oeste tienen variabilidad moderada con precios más homogéneos, mientras que la Zona Oriente muestra alta variabilidad y diversidad en la demanda. La Zona Sur presenta baja variabilidad, con precios más consistentes y menos datos atípicos, sugiriendo un mercado más uniforme.
+
+\vspace{-3em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+ggplot(datos_combinados, aes(x = interaction(zona, estrato), y = preciom, fill = zona)) +
+  geom_bar(stat = "summary", fun = "mean", position = "identity") +
+  labs(title = "",
+       x = "Zona y Estrato",
+       y = "Precio Promedio (en millones)") +
+  scale_fill_brewer(palette = "Set3") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0, vjust = 0.3), legend.position="none")
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 2. Precio Promedio por Zona y Estrato en Cali
+\end{center}
+```
+
+Las propiedades del estrato 6 son las más costosas, destacando su exclusividad y alto valor. En el estrato 5, la Zona Oriente presenta precios promedio más bajos que la Zona Norte, siendo Oriente generalmente más económico, aunque es necesario comparar con el área construida para una conclusión más precisa. En el estrato 4, los precios promedio son consistentes en las zonas Norte, Oeste y Oriente, lo que indica estabilidad en el mercado.
+
+\vspace{-3em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+ggplot(datos_combinados, aes(x = tipo, y = preciom, fill = zona)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(title = "",
+       x = "Tipo de Vivienda",
+       y = "Precio (millones)",
+       fill = "Zona") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust = 0.2),
+        legend.position = "none")
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 3. Distribución de Precios por Tipo de Vivienda y Zona
+\end{center}
+```
+
+En general, los precios de las casas tienden a ser más altos que los de los apartamentos en todas las zonas.
+La variabilidad en los precios de las casas es similar a la de los apartamentos, pero con algunos outliers más altos.
+Los puntos individuales fuera de las cajas representan outliers, que son precios significativamente más altos que el resto de los datos. Estos outliers son importantes porque pueden indicar propiedades excepcionales para el negocio.
+
+\vspace{-3em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+y_label <- stri_encode("Área Construida (m²)", to = "UTF-8")
+
+ggplot(datos_combinados, aes(x = as.factor(estrato), y = areaconst)) +
+  geom_boxplot(aes(fill = as.factor(estrato)), 
+               color = "black", 
+               outlier.colour = "black", 
+               outlier.size = 2) + 
+  scale_fill_brewer(palette = "Set3") +
+  labs(title = " ",
+       x = "Estrato",
+       y = y_label) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),
+        legend.position = "none")
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 4. Relación entre Área y Estrato
+\end{center}
+```
+La gráfica 4 muestra que a mayor estrato socioeconómico, mayor es el tamaño del área construida y su variabilidad. También se encuentran propiedades atípicas en cada estrato que serán analizadas en relación con el precio.
+
+\vspace{-3em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+x_label <- stri_encode("Área (m2)", to = "UTF-8")
+y_label <- stri_encode("Precio (Mill)", to = "UTF-8")
+
+ggplot(datos_combinados, aes(x = areaconst, y = preciom, color = tipo)) +
+  geom_point(alpha = 0.7) +
+  facet_wrap(~ zona) +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = " ",
+       x = x_label,
+       y = y_label,
+       color = "Tipo:") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5), 
+        legend.position = "bottom",
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8))
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 5. Relación entre Área y Precio por Zona
+\end{center}
+```
+
+En la Zona Oriente, las propiedades mayores a 1000 m² que cuestan menos de 500 millones de pesos parecen ideales. Lo mismo ocurre en la Zona Norte, donde también hay terrenos con características similares.
+
+\vspace{-3em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+ggplot(datos_combinados, aes(x = zona, y = as.factor(banios), fill = preciom)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +
+  labs(title = "",
+       x = "Zona",
+       y = "Baños",  # Texto sin caracteres especiales
+       fill = "Precio Mill") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 6. Mapa de Calor de Precio por Zona y Número de Baños
+\end{center}
+```
+Las propiedades con más baños tienen precios más altos, especialmente en las Zonas Norte y Oeste. Estas zonas muestran precios elevados para propiedades con 8-10 baños, aunque el área no es adecuada para tales bienes.
+
+\vspace{-1.5em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+ggplot(datos_combinados, aes(x = zona, fill = as.factor(habitac))) +
+  geom_bar(position = "fill") +
+  labs(title = "",
+       x = "Zona",
+       y = "Proporción",
+       fill = "Habitaciones") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set3")
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 7. Distribución de Habitaciones por Zona
+\end{center}
+```
+
+En las zonas norte, oeste y sur se encuentra el mayor número de propiedades con 3 habitaciones, en el centro se encuentra la mayor concentración de propiedades con 10 habitaciones.
+
+\vspace{-1em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+ggplot(datos_combinados, aes(x = zona, fill = as.factor(parquea))) +
+  geom_bar(position = "fill") +
+  labs(title = "",
+       x = "Zona",
+       y = "Proporción",
+       fill = "Parqueaderos") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 0.5)) +
+  scale_fill_brewer(palette = "Set3")
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 8. Distribución de Parqueaderos por Zona
+\end{center}
+```
+
+En el oriente se puede identificar la mayor cantidad de propiedades sin parqueadero, muy de cerca la zona centro, esto es evidente, porque muchas de las propiedades a la venta no tienen parqueadero, o lo tienen comunitario.
+En el oeste se encuentra la mayor cantidad de propiedades con 2 parqueaderos.
+
+\vspace{-3em}
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+ggplot(datos_combinados, aes(x = tipo, y = parquea, color = zona)) +
+  geom_jitter(alpha = 0.5, width = 0.2) +
+  facet_wrap(~ zona) +
+  scale_color_brewer(palette = "Set1") +
+  labs(title = "",
+       x = "Tipo",
+       y = "Parqueaderos",
+       color = "Zona") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "")
+```
+\vspace{-1em}
+```{=tex}
+\begin{center}
+Fig. 9. Relación entre Zona, Tipo de Propiedad y Parqueaderos
+\end{center}
+```
+
+En la misma zona oeste se puede evidenciar una mejor relación de la cantidad de parqueaderos con respecto a las habitaciones y los apartamentos.
+Esta misma relación es mucho más grande en cuanto a las casas en la zona sur.
+
+# DISCUSIÓN Y CONCLUSIONES
+
+A continuación se identifican las mejores propiedades con respecto a posibilidad de compra en sus diferentes posibilidades:
+
+
+```{=tex}
+\begin{center}
+TABLA I
+\end{center}
+\begin{center}
+CASAS PARA COMPRA Y CONSTRUCCIÓN EN TERRENO
+\end{center}
+```
+
+```{r, echo=FALSE, }
+datos_filtrados <- datos_combinados %>%
+  filter(areaconst > 1000, preciom <= 500)
+datos_filtrados <- datos_filtrados[, !(names(datos_filtrados) %in% c("id","piso", "tipo", "parquea", "banios", "habitac", "latitud", "longitud"))]
+kable(datos_filtrados, format = "latex", booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"), 
+                font_size = 10, 
+                fixed_thead = TRUE) %>%
+  column_spec(1:3, width = "1cm")
+  
+```
+En el análisis de propiedades, se destaca que la más cara se encuentra en la Zona Sur con un precio de 605 millones, mientras que la más económica está en la Zona Oriente con un precio de 112 millones. La propiedad con mayor área construida (932 m²) está en la Zona Sur, y la de menor área (120 m²) en la Zona Norte. El precio por metro cuadrado más alto (1.00 millones) y más bajo (0.28 millones) también se observan en la Zona Sur. La Zona Oriente se distingue por tener propiedades con más habitaciones y baños. La mayoría de las propiedades cuentan con al menos un parqueadero, excepto una en El Jardín con tres. Las propiedades están en estratos 3, 4 y 5, reflejando diversidad socioeconómica. Los barrios analizados incluyen El Limonar, Valle del Lili, El Jardín, y otros. Se recomienda considerar propiedades con precios más bajos por metro cuadrado para maximizar el retorno de la inversión, especialmente para alquileres a corto plazo y ventas a largo plazo.
+
+```{=tex}
+\begin{center}
+TABLA II
+\end{center}
+\begin{center}
+APARTAMENTOS PARA COMPRA Y PUESTA EN ALQUILER (FUTURA VENTA)
+\end{center}
+```
+
+```{r, echo=FALSE, warning=FALSE, results = 'asis'}
+datos_combinados <- datos_combinados %>%
+  mutate(precio_m2 = round(preciom / areaconst, 2))
+tabla_filtrada <- datos_combinados %>%
+  filter(tipo == "Apartamento", !is.na(parquea), parquea > 0) %>%
+  arrange(precio_m2) %>%
+  slice_head(n = 5)
+cols_a_remover <- c("id", "piso", "tipo", "parquea", "banios", "habitac", "latitud", "longitud", "precio_m2")
+
+for (col in cols_a_remover) {
+  tabla_filtrada <- tabla_filtrada[, !(names(tabla_filtrada) %in% col)]
+}
+kable(tabla_filtrada, format = "latex", booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"), 
+                font_size = 10, 
+                fixed_thead = TRUE) %>%
+  column_spec(1:3, width = "1cm")
+```
+
+La segunda tabla revela que la propiedad más cara está en la Zona Sur con un precio de 605 millones, mientras que la más económica está en la Zona Oriente con un precio de 112 millones. La propiedad con la mayor área construida se encuentra en la Zona Sur (932 m² en Valle del Lili), y la de menor área en la Zona Norte (120 m² en Cali Bella). El precio por metro cuadrado más alto se observa en la Zona Sur (1.00 millones en El Caney) y el más bajo también en la Zona Sur (0.28 millones en El Limonar). La Zona Oriente destaca por tener la propiedad con más habitaciones (5 en El Prado) y más baños (3 en El Jardín). La mayoría de las propiedades tienen al menos un parqueadero, excepto la propiedad en El Jardín que tiene tres. Las propiedades están distribuidas en estratos 3, 4 y 5, indicando una variedad en el nivel socioeconómico de las zonas. Los barrios mencionados incluyen El Limonar, Valle del Lili, El Jardín, El Prado, Nueva Floresta, Cali Bella, Versalles, San Joaquin, y El Caney, proporcionando una visión clara de las áreas específicas dentro de cada zona.
+Estos apartamentos tienen un precio por metro cuadrado variado y son recomendadas para ser compradas con el fin de alquilar en el corto plazo y considerar su venta en el largo plazo. Las diferencias en el precio por metro cuadrado sugieren diferentes estrategias de inversión y potencial de rentabilidad. La elección de propiedades con precios más bajos por metro cuadrado podría ser favorable para maximizar el retorno de la inversión.
+
+# ANEXOS
+
+```{=tex}
+\begin{center}
+TABLA III
+\end{center}
+\begin{center}
+ANEXO 1. COLUMNAS CON VALORES EN CERO EN LA BASE DE DATOS
+\end{center}
+```
+
+```{r, echo=FALSE}
+columnas_con_cero <- sapply(vivienda_faltantes, function(col) any(col == 0, na.rm = TRUE))
+nombres_columnas_con_cero <- names(columnas_con_cero[columnas_con_cero])
+df_columnas_con_cero <- data.frame(Columna = nombres_columnas_con_cero)
+kable(df_columnas_con_cero, format = "latex", booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"),
+                font_size = 10,
+                fixed_thead = TRUE) %>%
+  column_spec(1, width = "3cm")
+```
+
+ANEXO 1 - 2. Al momento de la evaluación inicial se identifica que el 95\% de los datos son válidos para el trabajo se identifican las columnas en las cuales se encuentran los valores cero y no validos (NA). Para el caso de este anexo se tiene en cuenta los valores de 0, pero hay un caso de una columna que no se ha tenido en cuenta, y es la de parqueaderos, debido a que independientemente de la propiedad no es obligatorio que está tenga un parqueadero, como sucede en la zona oriente y centro, es claro que en el centro de las ciudades es muy difícil tener acceso a un parqueadero privado, las contracciones están limitadas a factores culturales y de gobernanza.
+El valor presentado de 95\% representa los valores que validos y no están identificados en la tabla base como NA, en el anexo II, se identifican donde se encontraron estos datos.
+
+
+```{=tex}
+\begin{center}
+TABLA IV
+\end{center}
+\begin{center}
+ANEXO 2. COLUMNAS CON VALORES NA EN LA BASE DE DATOS
+\end{center}
+```
+
+```{r echo=FALSE, warning=FALSE}
+columnas_con_na <- sapply(vivienda_faltantes, function(col) any(is.na(col)))
+nombres_columnas_con_na <- names(columnas_con_na[columnas_con_na])
+columnas_por_fila <- 2
+matriz_columnas_na <- matrix(nombres_columnas_con_na, 
+                             ncol = columnas_por_fila, 
+                             byrow = TRUE)
+df_matriz_columnas_na <- as.data.frame(matriz_columnas_na)
+colnames(df_matriz_columnas_na) <- rep("", columnas_por_fila)
+kable(df_matriz_columnas_na, format = "latex", booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"),
+                font_size = 10,
+                fixed_thead = TRUE) %>%
+  column_spec(1:ncol(df_matriz_columnas_na), width = "2cm")
+
+```
+
+
+```{=tex}
+\begin{center}
+TABLA IV
+\end{center}
+\begin{center}
+ANEXO 3. ZONAS EN LA BASE DE DATOS
+\end{center}
+```
+
+```{r echo=FALSE, warning=FALSE}
+nombres_zonas <- unique(vivienda_faltantes_limpio$zona)
+columnas_por_fila <- 3
+matriz_zonas <- matrix(nombres_zonas, 
+                       ncol = columnas_por_fila, 
+                       byrow = TRUE)
+df_matriz_zonas <- as.data.frame(matriz_zonas)
+colnames(df_matriz_zonas) <- rep("", columnas_por_fila)
+kable(df_matriz_zonas, format = "latex", booktabs = TRUE) %>%
+  kable_styling(latex_options = c("striped", "hold_position"),
+                font_size = 10,
+                fixed_thead = TRUE) %>%
+  column_spec(1:3, width = "1.5cm")
+
+```
+
+ANEXO 3. Se ideintificarón las zonas como parte del procedimimiento de normalización y estandarización, esto teneindo en cuenta que las condiciones sociodemograficas cambian entre areas poblacionales.
+
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+top5_barrios <- datos_combinados %>%
+  group_by(barrio) %>%
+  summarise(n = dplyr::n(), .groups = 'drop') %>%
+  top_n(5, n) %>%
+  arrange(desc(n))
+
+datos_top5_barrios <- datos_combinados %>%
+  filter(barrio %in% top5_barrios$barrio)
+
+ggplot(datos_top5_barrios, aes(x = barrio, y = precio_m2, fill = zona)) +
+  geom_boxplot() +
+  labs(title = "",
+       x = "Barrio",
+       y = "Precio m2 (Millones)",
+       fill = "Zona") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{=tex}
+\begin{center}
+Fig. 10. ANEXO 4. Relación entre los 5 Barrios con Mayor Cantidad de Propiedades, Precio m2 y Zona
+\end{center}
+```
+
+ANEXO 4. Dentro del documento no se habla de la relación con el barrio, debido a que se asume que en condiciones evaluadas de precio por metro cuadrado se pueden tomar decisiones, como se pudo observar en el enfoque constructivo estaria basado en el estrato 3, situación que se repite en alquiler (futura venta), con ligeras variaciones.
+
+```{r, fig.width=3.5, fig.height=3.5, echo=FALSE, fig.align='center'}
+coords_fuera_rango <- datos_combinados %>%
+  filter(longitud < -180 | longitud > 180 | latitud < -90 | latitud > 90)
+datos_limpios <- datos_combinados %>%
+  filter(longitud >= -180 & longitud <= 180 & latitud >= -90 & latitud <= 90)
+ggplot(datos_limpios, aes(x = longitud, y = latitud, color = zona)) +
+  geom_point() +
+  labs(title = "",
+       x = "Longitud",
+       y = "Latitud") +
+  theme_minimal() +  
+  theme(legend.position = "right",  
+        legend.title = element_blank(),  
+        legend.text = element_text(size = 5)) +  
+  guides(color = guide_legend(override.aes = list(size = 3)))
+```
+
+```{=tex}
+\begin{center}
+Fig. 11. ANEXO 5. Distribución Geográfica de las Propiedades
+\end{center}
+```
+
+ANEXO 5. Las variables de longitud y latitud no se consideraron en el análisis por dos razones principales:
+
+La necesidad de un formato establecido para el documento, en el cual las gráficas deben tener dimensiones de 4 cm x 4 cm. Si se utiliza este formato, la gráfica se deforma de manera significativa. No obstante, se anexa para evidenciar la mejor forma de visualizar los datos.
+Como se evidencia en la gráfica, la Zona Sur presenta muchos errores en cuanto a la ubicación. Esto reduciría significativamente los datos disponibles para el análisis, pasando de un 95\% al 75\%, lo que implica una pérdida considerable de datos.
+
+En el análisis de propiedades, se destaca que la más cara se encuentra en la Zona Sur con un precio de 605 millones, mientras que la más económica está en la Zona Oriente con un precio de 112 millones. La propiedad con mayor área construida (932 m²) está en la Zona Sur, y la de menor área (120 m²) en la Zona Norte. El precio por metro cuadrado más alto (1.00 millones) y más bajo (0.28 millones) también se observan en la Zona Sur. La Zona Oriente se distingue por tener propiedades con más habitaciones y baños. La mayoría de las propiedades cuentan con al menos un parqueadero, excepto una en El Jardín con tres. Las propiedades están en estratos 3, 4 y 5, reflejando diversidad socioeconómica. Los barrios analizados incluyen El Limonar, Valle del Lili, El Jardín, y otros. Se recomienda considerar propiedades con precios más bajos por metro cuadrado para maximizar el retorno de la inversión, especialmente para alquileres a corto plazo y ventas a largo plazo.
+
+# REFERENCIAS BIBLIOGRÁFICAS {#references .numbered}
+
+[1] [@Dirac1953888]
+[2] [@Feynman1953888]
+[3] [@Meyer1953888]
+
